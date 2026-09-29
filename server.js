@@ -321,10 +321,18 @@ app.get('/api/latest', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-app.listen(port, () => {
-    console.log(`\n🌞 IoT Solar Tracker Backend`);
-    console.log(`   Server   : http://localhost:${port}`);
-    console.log(`   Supabase : ${supabaseUrl.replace('https://', '').split('.')[0]}...supabase.co`);
-    console.log(`   API Key  : ${API_SECRET_KEY.slice(0, 8)}...`);
-    console.log(`   Status   : Running ✓\n`);
+app.get('/', (req, res) => {
+    res.status(200).json({ success: true, message: 'IoT Solar Tracker API is online' });
 });
+
+export default app;
+
+if (!process.env.VERCEL) {
+    app.listen(port, () => {
+        console.log(`\n🌞 IoT Solar Tracker Backend`);
+        console.log(`   Server   : http://localhost:${port}`);
+        console.log(`   Supabase : ${supabaseUrl.replace('https://', '').split('.')[0]}...supabase.co`);
+        console.log(`   API Key  : ${API_SECRET_KEY.slice(0, 8)}...`);
+        console.log(`   Status   : Running ✓\n`);
+    });
+}
