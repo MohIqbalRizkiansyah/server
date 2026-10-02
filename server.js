@@ -52,6 +52,10 @@ const supabase    = createClient(supabaseUrl, supabaseKey);
 const API_SECRET_KEY = process.env.HARDWARE_API_KEY || 'arduino_solar_tracker_key';
 
 const requireApiKey = (req, res, next) => {
+    if (req.method === 'GET' && req.path === '/readings') {
+        return next();
+    }
+
     const clientKey = req.headers['x-api-key'];
     if (!clientKey || clientKey !== API_SECRET_KEY) {
         return res.status(401).json({ success: false, error: 'Akses Ditolak: API Key tidak valid' });
@@ -316,6 +320,36 @@ app.get('/api/latest', async (req, res) => {
         res.status(200).json({ success: true, data: data || null });
     } catch (err) {
         console.error('[/api/latest] Error:', err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Read-only telemetry endpoint for the web dashboard. Device writes remain API-key protected.
+app.get('/api/readings', async (req, res) => {
+    try {
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 1000, 1), 1000);
+        const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+        const { from, to, since } = req.query;
+
+        if ([from, to, since].some(value => value && !Number.isFinite(Date.parse(value)))) {
+            return res.status(400).json({ success: false, error: 'Rentang waktu tidak valid' });
+        }
+
+        let query = supabase
+            .from(TABLE_READINGS)
+            .select('*')
+            .order('created_at', { ascending: true })
+            .range(offset, offset + limit - 1);
+
+        if (from) query = query.gte('created_at', from);
+        if (to) query = query.lt('created_at', to);
+        if (since) query = query.gte('created_at', since);
+
+        const { data, error } = await query;
+        if (error) throw error;
+        res.status(200).json({ success: true, data: data || [] });
+    } catch (err) {
+        console.error('[/api/readings] Error:', err.message);
         res.status(500).json({ success: false, error: err.message });
     }
 });
