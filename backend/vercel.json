@@ -11,5 +11,24 @@
       "src": "/(.*)",
       "dest": "server.js"
     }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "https://dashboard-kk5z-4tlqd5qiu-mohiqbalrizkiansyahs-projects.vercel.app"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, x-api-key"
+        }
+      ]
+    }
   ]
 }
