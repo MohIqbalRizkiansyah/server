@@ -53,6 +53,36 @@ app.use((req, res, next) => {
 const supabaseUrl = process.env.SUPABASE_URL        || 'https://placeholder.supabase.co';
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY || 'placeholder_service_key';
 const supabase    = createClient(supabaseUrl, supabaseKey);
+let supabaseConnectionLogged = false;
+const loggedApiOrigins = new Set();
+
+function logApiConnection(req) {
+    const referer = req.get('referer');
+    let origin = req.get('origin') || 'not-provided';
+    if (origin === 'not-provided' && referer) {
+        try {
+            origin = new URL(referer).origin;
+        } catch {
+            origin = 'invalid-referer';
+        }
+    }
+
+    if (!loggedApiOrigins.has(origin)) {
+        loggedApiOrigins.add(origin);
+        console.info(`[connection] API request received: ${req.method} /api${req.path}; origin=${origin}`);
+    }
+}
+
+function logSupabaseConnection(operation) {
+    if (supabaseConnectionLogged) return;
+    supabaseConnectionLogged = true;
+    console.info(`[connection] Supabase query succeeded: ${operation}`);
+}
+
+app.use('/api', (req, res, next) => {
+    logApiConnection(req);
+    next();
+});
 
 // ── API Key Security ───────────────────────────────────────────────────────
 const API_SECRET_KEY = process.env.HARDWARE_API_KEY;
@@ -192,6 +222,7 @@ app.post('/api/sensor', async (req, res) => {
             .insert([insertData]);
 
         if (insertError) throw insertError;
+        logSupabaseConnection('POST /api/sensor');
 
         // ── Update device_status (upsert) ─────────────────────────────────
         await supabase
@@ -203,6 +234,7 @@ app.post('/api/sensor', async (req, res) => {
 
         res.status(200).json({ success: true, message: 'Data sensor tersimpan' });
     } catch (err) {
+        supabaseConnectionLogged = false;
         console.error('[/api/sensor] Error:', err.message);
         res.status(500).json({ success: false, error: err.message });
     }
@@ -229,8 +261,10 @@ app.post('/api/servo', async (req, res) => {
             .insert([{ servo_azimuth: azimuth, servo_elevation: elevation }]);
 
         if (error) throw error;
+        logSupabaseConnection('POST /api/servo');
         res.status(200).json({ success: true, message: 'Posisi servo tersimpan' });
     } catch (err) {
+        supabaseConnectionLogged = false;
         console.error('[/api/servo] Error:', err.message);
         res.status(500).json({ success: false, error: err.message });
     }
@@ -248,8 +282,10 @@ app.get('/api/health', async (req, res) => {
             .limit(1);
 
         if (error) throw error;
+        logSupabaseConnection('GET /api/health');
         res.status(200).json({ success: true, message: 'Backend & Supabase Online' });
     } catch (err) {
+        supabaseConnectionLogged = false;
         console.error('[/api/health] Supabase connection failed:', err.message);
         res.status(500).json({ success: false, error: 'Database disconnected' });
     }
@@ -269,8 +305,10 @@ app.get('/api/latest', async (req, res) => {
             .single();
 
         if (error && error.code !== 'PGRST116') throw error;
+        logSupabaseConnection('GET /api/latest');
         res.status(200).json({ success: true, data: data || null });
     } catch (err) {
+        supabaseConnectionLogged = false;
         console.error('[/api/latest] Error:', err.message);
         res.status(500).json({ success: false, error: err.message });
     }
@@ -299,8 +337,10 @@ app.get('/api/readings', async (req, res) => {
 
         const { data, error } = await query;
         if (error) throw error;
+        logSupabaseConnection('GET /api/readings');
         res.status(200).json({ success: true, data: data || [] });
     } catch (err) {
+        supabaseConnectionLogged = false;
         console.error('[/api/readings] Error:', err.message);
         res.status(500).json({ success: false, error: err.message });
     }
