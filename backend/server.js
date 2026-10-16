@@ -12,7 +12,14 @@ const port = process.env.PORT || 3000;
 const TABLE_READINGS      = 'readings';
 const TABLE_DEVICE_STATUS = 'device_status';
 
-app.use(cors());
+const configuredFrontendOrigins = (process.env.FRONTEND_ORIGINS || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean);
+const localFrontendOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+const allowedFrontendOrigins = [...new Set([...configuredFrontendOrigins, ...localFrontendOrigins])];
+
+app.use(cors(configuredFrontendOrigins.length ? { origin: allowedFrontendOrigins } : undefined));
 
 
 app.use((req, res, next) => {
