@@ -11,6 +11,8 @@ const port = process.env.PORT || 3000;
 // Nama tabel utama di Supabase
 const TABLE_READINGS      = 'readings';
 const TABLE_DEVICE_STATUS = 'device_status';
+const ESP32_DEVICE_ID = process.env.ESP32_DEVICE_ID || 'solar-tracker-01';
+const DEVICE_OFFLINE_AFTER_MS = 90_000;
 
 const configuredFrontendOrigins = (process.env.FRONTEND_ORIGINS || '')
     .split(',')
@@ -198,7 +200,7 @@ app.post('/api/sensor', async (req, res) => {
         const temperature     = (body.temperature != null) ? safeNum(body.temperature) : null;
         const humidity        = (body.humidity    != null) ? safeNum(body.humidity)    : null;
 
-        const deviceId        = body.device_id || 'solar-tracker-01';
+        const deviceId        = body.device_id || ESP32_DEVICE_ID;
 
         // Hitung daya: P = V × I (arus mA → A)
         const power = +(voltage * (current / 1000)).toFixed(4);
@@ -234,14 +236,16 @@ app.post('/api/sensor', async (req, res) => {
         console.info(`[data] ESP32 -> Backend -> Supabase: sensor row saved; ${JSON.stringify(insertData)}`);
 
         // ── Update device_status (upsert) ─────────────────────────────────
-        await supabase
+        const { error: statusError } = await supabase
             .from(TABLE_DEVICE_STATUS)
             .upsert(
                 { device_id: deviceId, last_seen: new Date().toISOString() },
                 { onConflict: 'device_id' }
             );
 
-        res.status(200).json({ success: true, message: 'Data sensor tersimpan' });
+        if (statusError) throw statusError;
+
+        res.status(200).json({ success: true, message: 'Data sensor tersimpan', deviceId });
     } catch (err) {
         supabaseConnectionLogged = false;
         console.error('[/api/sensor] Error:', err.message);
@@ -305,6 +309,7 @@ app.get('/api/health', async (req, res) => {
 app.get('/api/status', async (req, res) => {
     let supabaseConnected = false;
     let dashboardLastSeen = null;
+    let esp32LastSeen = null;
     try {
         const { error } = await supabase
             .from(TABLE_READINGS)
@@ -332,11 +337,27 @@ app.get('/api/status', async (req, res) => {
         } catch (err) {
             console.error('[/api/status] Dashboard heartbeat lookup failed:', err.message);
         }
+
+        try {
+            const { data, error } = await supabase
+                .from(TABLE_DEVICE_STATUS)
+                .select('last_seen')
+                .eq('device_id', ESP32_DEVICE_ID)
+                .maybeSingle();
+
+            if (error) throw error;
+            esp32LastSeen = data?.last_seen || null;
+        } catch (err) {
+            console.error('[/api/status] ESP32 heartbeat lookup failed:', err.message);
+        }
     }
 
     const dashboardConnected = dashboardLastSeen !== null
         && Number.isFinite(Date.parse(dashboardLastSeen))
         && Date.now() - Date.parse(dashboardLastSeen) <= 30_000;
+    const esp32Connected = esp32LastSeen !== null
+        && Number.isFinite(Date.parse(esp32LastSeen))
+        && Date.now() - Date.parse(esp32LastSeen) <= DEVICE_OFFLINE_AFTER_MS;
 
     res.status(200).json({
         success: true,
@@ -345,6 +366,11 @@ app.get('/api/status', async (req, res) => {
         dashboard: {
             connected: dashboardConnected,
             lastSeen: dashboardLastSeen
+        },
+        esp32: {
+            deviceId: ESP32_DEVICE_ID,
+            connected: esp32Connected,
+            lastSeen: esp32LastSeen
         },
         checkedAt: new Date().toISOString()
     });
