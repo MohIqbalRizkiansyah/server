@@ -23,6 +23,7 @@ const allowedFrontendOrigins = [...new Set([
     ...localFrontendOrigins,
     ...productionFrontendOrigins
 ])];
+const dashboardOrigins = new Set(allowedFrontendOrigins);
 
 app.use(cors({ origin: allowedFrontendOrigins }));
 
@@ -59,9 +60,10 @@ const supabaseUrl = process.env.SUPABASE_URL        || 'https://placeholder.supa
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY || 'placeholder_service_key';
 const supabase    = createClient(supabaseUrl, supabaseKey);
 let supabaseConnectionLogged = false;
+let lastDashboardRequestAt = null;
 const loggedApiOrigins = new Set();
 
-function logApiConnection(req) {
+function logApiConnection(req, res) {
     const referer = req.get('referer');
     let origin = req.get('origin') || 'not-provided';
     if (origin === 'not-provided' && referer) {
@@ -70,6 +72,12 @@ function logApiConnection(req) {
         } catch {
             origin = 'invalid-referer';
         }
+    }
+
+    if (req.method === 'GET' && req.path === '/readings' && dashboardOrigins.has(origin)) {
+        res.on('finish', () => {
+            lastDashboardRequestAt = Date.now();
+        });
     }
 
     if (!loggedApiOrigins.has(origin)) {
@@ -85,7 +93,7 @@ function logSupabaseConnection(operation) {
 }
 
 app.use('/api', (req, res, next) => {
-    logApiConnection(req);
+    logApiConnection(req, res);
     next();
 });
 
@@ -96,7 +104,7 @@ if (!API_SECRET_KEY) {
 }
 
 const requireApiKey = (req, res, next) => {
-    if (req.method === 'GET' && ['/health', '/readings'].includes(req.path)) {
+    if (req.method === 'GET' && ['/health', '/readings', '/status'].includes(req.path)) {
         return next();
     }
 
@@ -296,6 +304,38 @@ app.get('/api/health', async (req, res) => {
     }
 });
 
+// Public connection status for the backend landing page and dashboard diagnostics.
+app.get('/api/status', async (req, res) => {
+    let supabaseConnected = false;
+    try {
+        const { error } = await supabase
+            .from(TABLE_READINGS)
+            .select('id')
+            .limit(1);
+
+        if (error) throw error;
+        supabaseConnected = true;
+        logSupabaseConnection('GET /api/status');
+    } catch (err) {
+        supabaseConnectionLogged = false;
+        console.error('[/api/status] Supabase connection failed:', err.message);
+    }
+
+    const dashboardConnected = lastDashboardRequestAt !== null
+        && Date.now() - lastDashboardRequestAt <= 20_000;
+
+    res.status(200).json({
+        success: true,
+        backend: { connected: true },
+        supabase: { connected: supabaseConnected },
+        dashboard: {
+            connected: dashboardConnected,
+            lastSeen: lastDashboardRequestAt ? new Date(lastDashboardRequestAt).toISOString() : null
+        },
+        checkedAt: new Date().toISOString()
+    });
+});
+
 // =============================================================================
 // ENDPOINT 5: Ambil data terbaru — untuk dashboard
 // GET /api/latest
@@ -353,7 +393,69 @@ app.get('/api/readings', async (req, res) => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-    res.status(200).json({ success: true, message: 'IoT Solar Tracker API is online' });
+    res.type('html').send(`<!doctype html>
+<html lang="id">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Status Koneksi · Solar Tracker</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #0a0d14; color: #e8edf5; font: 15px/1.5 system-ui, sans-serif; }
+        main { width: min(100%, 560px); padding: 28px; background: #101626; border: 1px solid #26334d; border-radius: 16px; }
+        h1 { margin: 0 0 6px; font-size: 22px; }
+        .subtitle, .updated { color: #91a0ba; }
+        .statuses { display: grid; gap: 12px; margin: 24px 0; }
+        .status { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px; background: #0b1120; border: 1px solid #26334d; border-radius: 10px; }
+        .label { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; background: #718096; }
+        .connected .dot { background: #00e5a0; box-shadow: 0 0 10px #00e5a0; }
+        .disconnected .dot { background: #ff626e; box-shadow: 0 0 8px #ff626e; }
+        .state { text-align: right; color: #91a0ba; font-size: 13px; }
+        .connected .state { color: #00e5a0; }
+        .disconnected .state { color: #ff858d; }
+        .updated { font-size: 12px; }
+        @media (max-width: 420px) { main { padding: 20px; } .status { align-items: flex-start; flex-direction: column; gap: 6px; } .state { padding-left: 20px; text-align: left; } }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>Status Koneksi Solar Tracker</h1>
+        <p class="subtitle">Status dashboard dan database diperbarui otomatis.</p>
+        <section class="statuses" aria-live="polite">
+            <div class="status" id="dashboard"><span class="label"><span class="dot"></span>Dashboard → Backend</span><span class="state">Memeriksa...</span></div>
+            <div class="status" id="supabase"><span class="label"><span class="dot"></span>Backend → Supabase</span><span class="state">Memeriksa...</span></div>
+        </section>
+        <p class="updated" id="updated">Pengecekan koneksi berlangsung...</p>
+    </main>
+    <script>
+        const setStatus = (id, connected, detail) => {
+            const row = document.getElementById(id);
+            row.className = 'status ' + (connected ? 'connected' : 'disconnected');
+            row.querySelector('.state').textContent = detail || (connected ? 'Terhubung' : 'Tidak terhubung');
+        };
+        async function refreshStatus() {
+            try {
+                const response = await fetch('/api/status', { cache: 'no-store' });
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const result = await response.json();
+                setStatus('dashboard', result.dashboard.connected,
+                    result.dashboard.connected ? 'Terhubung' : 'Belum ada koneksi dashboard terbaru');
+                setStatus('supabase', result.supabase.connected);
+                document.getElementById('updated').textContent =
+                    'Pembaruan terakhir: ' + new Date(result.checkedAt).toLocaleString('id-ID');
+            } catch (error) {
+                setStatus('dashboard', false, 'Backend tidak dapat dijangkau');
+                setStatus('supabase', false, 'Status tidak tersedia');
+                document.getElementById('updated').textContent = 'Gagal memeriksa status koneksi: ' + error.message;
+            }
+        }
+        refreshStatus();
+        setInterval(refreshStatus, 5000);
+    </script>
+</body>
+</html>`);
 });
 
 export default app;
