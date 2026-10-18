@@ -415,9 +415,14 @@ app.get('/api/readings', async (req, res) => {
         const { data, error } = await query;
         if (error) throw error;
         logSupabaseConnection('GET /api/readings');
-        if (data?.length) {
-            const latest = data[data.length - 1];
-            console.info(`[data] Supabase -> Backend: fetched ${data.length} reading(s); latest=${JSON.stringify({
+        const liveRows = since
+            ? (data || []).filter(row => Date.parse(row.created_at) > Date.parse(since))
+            : [];
+        if (liveRows.length) {
+            const latest = [...liveRows].reverse().find(row =>
+                row.voltage != null || row.power != null || row.ldr_top_left != null
+            ) || liveRows[liveRows.length - 1];
+            console.info(`[data] Supabase -> Backend: fetched ${liveRows.length} new live reading(s); latest=${JSON.stringify({
                 id: latest.id,
                 device_id: latest.device_id,
                 created_at: latest.created_at,
