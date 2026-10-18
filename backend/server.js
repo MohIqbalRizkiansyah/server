@@ -17,9 +17,14 @@ const configuredFrontendOrigins = (process.env.FRONTEND_ORIGINS || '')
     .map(origin => origin.trim())
     .filter(Boolean);
 const localFrontendOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173'];
-const allowedFrontendOrigins = [...new Set([...configuredFrontendOrigins, ...localFrontendOrigins])];
+const productionFrontendOrigins = ['https://dashboard-theta-silk-86.vercel.app'];
+const allowedFrontendOrigins = [...new Set([
+    ...configuredFrontendOrigins,
+    ...localFrontendOrigins,
+    ...productionFrontendOrigins
+])];
 
-app.use(cors(configuredFrontendOrigins.length ? { origin: allowedFrontendOrigins } : undefined));
+app.use(cors({ origin: allowedFrontendOrigins }));
 
 
 app.use((req, res, next) => {
@@ -91,7 +96,7 @@ if (!API_SECRET_KEY) {
 }
 
 const requireApiKey = (req, res, next) => {
-    if (req.method === 'GET' && req.path === '/readings') {
+    if (req.method === 'GET' && ['/health', '/readings'].includes(req.path)) {
         return next();
     }
 
