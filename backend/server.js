@@ -23,7 +23,6 @@ const allowedFrontendOrigins = [...new Set([
     ...localFrontendOrigins,
     ...productionFrontendOrigins
 ])];
-const dashboardOrigins = new Set(allowedFrontendOrigins);
 
 app.use(cors({ origin: allowedFrontendOrigins }));
 
@@ -60,10 +59,9 @@ const supabaseUrl = process.env.SUPABASE_URL        || 'https://placeholder.supa
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY || 'placeholder_service_key';
 const supabase    = createClient(supabaseUrl, supabaseKey);
 let supabaseConnectionLogged = false;
-let lastDashboardRequestAt = null;
 const loggedApiOrigins = new Set();
 
-function logApiConnection(req, res) {
+function logApiConnection(req) {
     const referer = req.get('referer');
     let origin = req.get('origin') || 'not-provided';
     if (origin === 'not-provided' && referer) {
@@ -72,12 +70,6 @@ function logApiConnection(req, res) {
         } catch {
             origin = 'invalid-referer';
         }
-    }
-
-    if (req.method === 'GET' && req.path === '/readings' && dashboardOrigins.has(origin)) {
-        res.on('finish', () => {
-            lastDashboardRequestAt = Date.now();
-        });
     }
 
     if (!loggedApiOrigins.has(origin)) {
@@ -93,7 +85,7 @@ function logSupabaseConnection(operation) {
 }
 
 app.use('/api', (req, res, next) => {
-    logApiConnection(req, res);
+    logApiConnection(req);
     next();
 });
 
@@ -105,6 +97,9 @@ if (!API_SECRET_KEY) {
 
 const requireApiKey = (req, res, next) => {
     if (req.method === 'GET' && ['/health', '/readings', '/status'].includes(req.path)) {
+        return next();
+    }
+    if (req.method === 'POST' && req.path === '/dashboard-heartbeat') {
         return next();
     }
 
@@ -307,6 +302,7 @@ app.get('/api/health', async (req, res) => {
 // Public connection status for the backend landing page and dashboard diagnostics.
 app.get('/api/status', async (req, res) => {
     let supabaseConnected = false;
+    let dashboardLastSeen = null;
     try {
         const { error } = await supabase
             .from(TABLE_READINGS)
@@ -321,8 +317,24 @@ app.get('/api/status', async (req, res) => {
         console.error('[/api/status] Supabase connection failed:', err.message);
     }
 
-    const dashboardConnected = lastDashboardRequestAt !== null
-        && Date.now() - lastDashboardRequestAt <= 20_000;
+    if (supabaseConnected) {
+        try {
+            const { data, error } = await supabase
+                .from(TABLE_DEVICE_STATUS)
+                .select('last_seen')
+                .eq('device_id', 'dashboard-web')
+                .maybeSingle();
+
+            if (error) throw error;
+            dashboardLastSeen = data?.last_seen || null;
+        } catch (err) {
+            console.error('[/api/status] Dashboard heartbeat lookup failed:', err.message);
+        }
+    }
+
+    const dashboardConnected = dashboardLastSeen !== null
+        && Number.isFinite(Date.parse(dashboardLastSeen))
+        && Date.now() - Date.parse(dashboardLastSeen) <= 30_000;
 
     res.status(200).json({
         success: true,
@@ -330,10 +342,28 @@ app.get('/api/status', async (req, res) => {
         supabase: { connected: supabaseConnected },
         dashboard: {
             connected: dashboardConnected,
-            lastSeen: lastDashboardRequestAt ? new Date(lastDashboardRequestAt).toISOString() : null
+            lastSeen: dashboardLastSeen
         },
         checkedAt: new Date().toISOString()
     });
+});
+
+app.post('/api/dashboard-heartbeat', async (req, res) => {
+    try {
+        const lastSeen = new Date().toISOString();
+        const { error } = await supabase
+            .from(TABLE_DEVICE_STATUS)
+            .upsert(
+                { device_id: 'dashboard-web', last_seen: lastSeen },
+                { onConflict: 'device_id' }
+            );
+
+        if (error) throw error;
+        res.status(200).json({ success: true, lastSeen });
+    } catch (err) {
+        console.error('[/api/dashboard-heartbeat] Error:', err.message);
+        res.status(500).json({ success: false, error: 'Dashboard heartbeat could not be saved' });
+    }
 });
 
 // =============================================================================
