@@ -231,6 +231,7 @@ app.post('/api/sensor', async (req, res) => {
 
         if (insertError) throw insertError;
         logSupabaseConnection('POST /api/sensor');
+        console.info(`[data] ESP32 -> Backend -> Supabase: sensor row saved; ${JSON.stringify(insertData)}`);
 
         // ── Update device_status (upsert) ─────────────────────────────────
         await supabase
@@ -270,6 +271,7 @@ app.post('/api/servo', async (req, res) => {
 
         if (error) throw error;
         logSupabaseConnection('POST /api/servo');
+        console.info(`[data] ESP32 -> Backend -> Supabase: servo row saved; ${JSON.stringify({ azimuth, elevation })}`);
         res.status(200).json({ success: true, message: 'Posisi servo tersimpan' });
     } catch (err) {
         supabaseConnectionLogged = false;
@@ -413,7 +415,18 @@ app.get('/api/readings', async (req, res) => {
         const { data, error } = await query;
         if (error) throw error;
         logSupabaseConnection('GET /api/readings');
-        res.status(200).json({ success: true, data: data || [] });
+        if (data?.length) {
+            const latest = data[data.length - 1];
+            console.info(`[data] Supabase -> Backend: fetched ${data.length} reading(s); latest=${JSON.stringify({
+                id: latest.id,
+                device_id: latest.device_id,
+                created_at: latest.created_at,
+                voltage: latest.voltage,
+                current: latest.current,
+                power: latest.power
+            })}`);
+        }
+        res.status(200).json({ success: true, source: 'supabase', count: data?.length || 0, data: data || [] });
     } catch (err) {
         supabaseConnectionLogged = false;
         console.error('[/api/readings] Error:', err.message);
